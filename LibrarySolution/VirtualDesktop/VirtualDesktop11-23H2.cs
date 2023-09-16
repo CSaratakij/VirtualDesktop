@@ -1,14 +1,17 @@
-// Author: Markus Scholtes, 2022
-// Modified by: CSaratakij, 2022
-// Version 1.11, 2022-11-13
-// Version for Windows 11 22H2
+// Author: Markus Scholtes, 2023
+// Modified by: CSaratakij, 2023
+// Version 1.15, 2023-08-29
+// Version for Windows 11 22H2.2215 and up
+// Compile with:
+// C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe VirtualDesktop11-23H2.cs
+
 using System;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Text;
 
 // Based on http://stackoverflow.com/a/32417530, Windows 10 SDK, github project Grabacr07/VirtualDesktop and own research
-
 namespace VirtualDesktop
 {
 	#region COM API
@@ -131,43 +134,46 @@ namespace VirtualDesktop
 
 	[ComImport]
 	[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-	[Guid("536D3495-B208-4CC9-AE26-DE8111275BF8")]
+	[Guid("3F07F4BE-B107-441A-AF0F-39D82529072C")]
 	internal interface IVirtualDesktop
 	{
 		bool IsViewVisible(IApplicationView view);
 		Guid GetId();
-		IntPtr Unknown1();
 		[return: MarshalAs(UnmanagedType.HString)]
 		string GetName();
 		[return: MarshalAs(UnmanagedType.HString)]
 		string GetWallpaperPath();
+		bool IsRemote();
 	}
 
 	[ComImport]
 	[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-	[Guid("B2F925B9-5A0F-4D2E-9F4D-2B1507593C10")]
+	[Guid("A3175F2D-239C-4BD2-8AA0-EEBA8B0B138E")]
 	internal interface IVirtualDesktopManagerInternal
 	{
-		int GetCount(IntPtr hWndOrMon);
+		int GetCount();
 		void MoveViewToDesktop(IApplicationView view, IVirtualDesktop desktop);
 		bool CanViewMoveDesktops(IApplicationView view);
-		IVirtualDesktop GetCurrentDesktop(IntPtr hWndOrMon);
-		IObjectArray GetAllCurrentDesktops();
-		void GetDesktops(IntPtr hWndOrMon, out IObjectArray desktops);
+		IVirtualDesktop GetCurrentDesktop();
+		void GetDesktops(out IObjectArray desktops);
 		[PreserveSig]
 		int GetAdjacentDesktop(IVirtualDesktop from, int direction, out IVirtualDesktop desktop);
-		void SwitchDesktop(IntPtr hWndOrMon, IVirtualDesktop desktop);
-		IVirtualDesktop CreateDesktop(IntPtr hWndOrMon);
-		void MoveDesktop(IVirtualDesktop desktop, IntPtr hWndOrMon, int nIndex);
+		void SwitchDesktop(IVirtualDesktop desktop);
+//		void SwitchDesktopAndMoveForegroundView(IVirtualDesktop desktop);
+		IVirtualDesktop CreateDesktop();
+		void MoveDesktop(IVirtualDesktop desktop, int nIndex);
 		void RemoveDesktop(IVirtualDesktop desktop, IVirtualDesktop fallback);
 		IVirtualDesktop FindDesktop(ref Guid desktopid);
-    void GetDesktopSwitchIncludeExcludeViews(IVirtualDesktop desktop, out IObjectArray unknown1, out IObjectArray unknown2);
+		void GetDesktopSwitchIncludeExcludeViews(IVirtualDesktop desktop, out IObjectArray unknown1, out IObjectArray unknown2);
 		void SetDesktopName(IVirtualDesktop desktop, [MarshalAs(UnmanagedType.HString)] string name);
 		void SetDesktopWallpaper(IVirtualDesktop desktop, [MarshalAs(UnmanagedType.HString)] string path);
-    void UpdateWallpaperPathForAllDesktops([MarshalAs(UnmanagedType.HString)] string path);
-    void CopyDesktopState(IApplicationView pView0, IApplicationView pView1);
-    int GetDesktopIsPerMonitor();
-    void SetDesktopIsPerMonitor(bool state);
+		void UpdateWallpaperPathForAllDesktops([MarshalAs(UnmanagedType.HString)] string path);
+		void CopyDesktopState(IApplicationView pView0, IApplicationView pView1);
+		void CreateRemoteDesktop([MarshalAs(UnmanagedType.HString)] string path, out IVirtualDesktop desktop);
+		void SwitchRemoteDesktop(IVirtualDesktop desktop);
+		void SwitchDesktopWithAnimation(IVirtualDesktop desktop);
+		void GetLastActiveDesktop(out IVirtualDesktop desktop);
+		void WaitForAnimationToComplete();
 	}
 
 	[ComImport]
@@ -231,10 +237,10 @@ namespace VirtualDesktop
 
 		internal static IVirtualDesktop GetDesktop(int index)
 		{	// get desktop with index
-			int count = VirtualDesktopManagerInternal.GetCount(IntPtr.Zero);
+			int count = VirtualDesktopManagerInternal.GetCount();
 			if (index < 0 || index >= count) throw new ArgumentOutOfRangeException("index");
 			IObjectArray desktops;
-			VirtualDesktopManagerInternal.GetDesktops(IntPtr.Zero, out desktops);
+			VirtualDesktopManagerInternal.GetDesktops(out desktops);
 			object objdesktop;
 			desktops.GetAt(index, typeof(IVirtualDesktop).GUID, out objdesktop);
 			Marshal.ReleaseComObject(desktops);
@@ -246,9 +252,9 @@ namespace VirtualDesktop
 			int index = -1;
 			Guid IdSearch = desktop.GetId();
 			IObjectArray desktops;
-			VirtualDesktopManagerInternal.GetDesktops(IntPtr.Zero, out desktops);
+			VirtualDesktopManagerInternal.GetDesktops(out desktops);
 			object objdesktop;
-			for (int i = 0; i < VirtualDesktopManagerInternal.GetCount(IntPtr.Zero); i++)
+			for (int i = 0; i < VirtualDesktopManagerInternal.GetCount(); i++)
 			{
 				desktops.GetAt(i, typeof(IVirtualDesktop).GUID, out objdesktop);
 				if (IdSearch.CompareTo(((IVirtualDesktop)objdesktop).GetId()) == 0)
@@ -277,15 +283,38 @@ namespace VirtualDesktop
 	#endregion
 
 	#region public interface
+	public class WindowInformation
+	{ // stores window informations
+		public string Title { get; set; }
+		public int Handle { get; set; }
+	}
+
 	public class Desktop
 	{
 		// get process id to window handle
 		[DllImport("user32.dll")]
-		private static extern int GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
+		private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
+
+		// get thread id of current process
+		[DllImport("kernel32.dll")]
+		static extern uint GetCurrentThreadId();
+
+		// attach input to thread
+		[DllImport("user32.dll")]
+		static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
 
 		// get handle of active window
 		[DllImport("user32.dll")]
 		private static extern IntPtr GetForegroundWindow();
+
+		// try to set foreground window
+		[DllImport("user32.dll")]
+		[return: MarshalAs(UnmanagedType.Bool)]static extern bool SetForegroundWindow(IntPtr hWnd);
+
+		// send message to window
+		[DllImport("user32.dll")]
+		static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+		private const int SW_MINIMIZE = 6;
 
 		private static readonly Guid AppOnAllDesktops = new Guid("BB64D5B7-4DE3-4AB2-A87C-DB7601AEA7DC");
 		private static readonly Guid WindowOnAllDesktops = new Guid("C2DDEA68-66F2-4CF9-8264-1BFD00FBBBAC");
@@ -306,12 +335,12 @@ namespace VirtualDesktop
 
 		public static int Count
 		{ // return the number of desktops
-			get { return DesktopManager.VirtualDesktopManagerInternal.GetCount(IntPtr.Zero); }
+			get { return DesktopManager.VirtualDesktopManagerInternal.GetCount(); }
 		}
 
 		public static Desktop Current
 		{ // returns current desktop
-			get { return new Desktop(DesktopManager.VirtualDesktopManagerInternal.GetCurrentDesktop(IntPtr.Zero)); }
+			get { return new Desktop(DesktopManager.VirtualDesktopManagerInternal.GetCurrentDesktop()); }
 		}
 
 		public static Desktop FromIndex(int index)
@@ -324,7 +353,7 @@ namespace VirtualDesktop
 			if (hWnd == IntPtr.Zero) throw new ArgumentNullException();
 			Guid id = DesktopManager.VirtualDesktopManager.GetWindowDesktopId(hWnd);
 			if ((id.CompareTo(AppOnAllDesktops) == 0) || (id.CompareTo(WindowOnAllDesktops) == 0))
-				return new Desktop(DesktopManager.VirtualDesktopManagerInternal.GetCurrentDesktop(IntPtr.Zero));
+				return new Desktop(DesktopManager.VirtualDesktopManagerInternal.GetCurrentDesktop());
 			else
 				return new Desktop(DesktopManager.VirtualDesktopManagerInternal.FindDesktop(ref id));
 		}
@@ -404,7 +433,7 @@ namespace VirtualDesktop
 		{ // get index of desktop with partial name, return -1 if no desktop found
 			int index = -1;
 
-			for (int i = 0; i < DesktopManager.VirtualDesktopManagerInternal.GetCount(IntPtr.Zero); i++)
+			for (int i = 0; i < DesktopManager.VirtualDesktopManagerInternal.GetCount(); i++)
 			{ // loop through all virtual desktops and compare partial name to desktop name
 				if (DesktopNameFromIndex(i).ToUpper().IndexOf(partialName.ToUpper()) >= 0)
 				{ index = i;
@@ -417,7 +446,7 @@ namespace VirtualDesktop
 
 		public static Desktop Create()
 		{ // create a new desktop
-			return new Desktop(DesktopManager.VirtualDesktopManagerInternal.CreateDesktop(IntPtr.Zero));
+			return new Desktop(DesktopManager.VirtualDesktopManagerInternal.CreateDesktop());
 		}
 
 		public void Remove(Desktop fallback = null)
@@ -444,12 +473,13 @@ namespace VirtualDesktop
 
 		public static void RemoveAll()
 		{ // remove all desktops but visible
-			DesktopManager.VirtualDesktopManagerInternal.SetDesktopIsPerMonitor(true);
+			// ***** To reimplement  since not supported by API anymore
+			// DesktopManager.VirtualDesktopManagerInternal.SetDesktopIsPerMonitor(true);
 		}
 
 		public void Move(int index)
 		{ // move current desktop to desktop in index (-> index = 0..Count-1)
-			DesktopManager.VirtualDesktopManagerInternal.MoveDesktop(ivd, IntPtr.Zero, index);
+			DesktopManager.VirtualDesktopManagerInternal.MoveDesktop(ivd, index);
 		}
 
 		public void SetName(string Name)
@@ -471,12 +501,32 @@ namespace VirtualDesktop
 
 		public bool IsVisible
 		{ // return true if this desktop is the current displayed one
-			get { return object.ReferenceEquals(ivd, DesktopManager.VirtualDesktopManagerInternal.GetCurrentDesktop(IntPtr.Zero)); }
+			get { return object.ReferenceEquals(ivd, DesktopManager.VirtualDesktopManagerInternal.GetCurrentDesktop()); }
 		}
 
 		public void MakeVisible()
 		{ // make this desktop visible
-			DesktopManager.VirtualDesktopManagerInternal.SwitchDesktop(IntPtr.Zero, ivd);
+			WindowInformation wi = FindWindow("Program Manager");
+
+			// activate desktop to prevent flashing icons in taskbar
+			int dummy;
+			uint DesktopThreadId = GetWindowThreadProcessId(new IntPtr(wi.Handle), out dummy);
+			uint ForegroundThreadId = GetWindowThreadProcessId(GetForegroundWindow(), out dummy);
+			uint CurrentThreadId = GetCurrentThreadId();
+
+			if ((DesktopThreadId != 0) && (ForegroundThreadId != 0) && (ForegroundThreadId != CurrentThreadId))
+			{
+				AttachThreadInput(DesktopThreadId, CurrentThreadId, true);
+				AttachThreadInput(ForegroundThreadId, CurrentThreadId, true);
+				SetForegroundWindow(new IntPtr(wi.Handle));
+				AttachThreadInput(ForegroundThreadId, CurrentThreadId, false);
+				AttachThreadInput(DesktopThreadId, CurrentThreadId, false);
+			}
+
+			DesktopManager.VirtualDesktopManagerInternal.SwitchDesktop(ivd);
+
+			// direct desktop to give away focus
+			ShowWindow(new IntPtr(wi.Handle), SW_MINIMIZE);
 		}
 
 		public Desktop Left
@@ -606,6 +656,56 @@ namespace VirtualDesktop
 				DesktopManager.VirtualDesktopPinnedApps.UnpinAppID(appId);
 			}
 		}
+
+		// prepare callback function for window enumeration
+		private delegate bool CallBackPtr(int hwnd, int lParam);
+		private static CallBackPtr callBackPtr = Callback;
+		// list of window informations
+		private static List<WindowInformation> WindowInformationList = new List<WindowInformation>();
+
+		// enumerate windows
+		[DllImport("User32.dll", SetLastError = true)]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		private static extern bool EnumWindows(CallBackPtr lpEnumFunc, IntPtr lParam);
+
+		// get window title length
+		[DllImport("User32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+		private static extern int GetWindowTextLength(IntPtr hWnd);
+
+		// get window title
+		[DllImport("User32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+		private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+		// callback function for window enumeration
+		private static bool Callback(int hWnd, int lparam)
+		{
+			int length = GetWindowTextLength((IntPtr)hWnd);
+			if (length > 0)
+			{
+				StringBuilder sb = new StringBuilder(length + 1);
+				if (GetWindowText((IntPtr)hWnd, sb, sb.Capacity) > 0)
+				{ WindowInformationList.Add(new WindowInformation {Handle = hWnd, Title = sb.ToString()}); }
+			}
+			return true;
+		}
+
+		// get list of all windows with title
+		public static List<WindowInformation> GetWindows()
+		{
+			WindowInformationList = new List<WindowInformation>();
+			EnumWindows(callBackPtr, IntPtr.Zero);
+			return WindowInformationList;
+		}
+
+		// find first window with string in title
+		public static WindowInformation FindWindow(string WindowTitle)
+		{
+			WindowInformationList = new List<WindowInformation>();
+			EnumWindows(callBackPtr, IntPtr.Zero);
+			WindowInformation result = WindowInformationList.Find(x => x.Title.IndexOf(WindowTitle, StringComparison.OrdinalIgnoreCase) >= 0);
+			return result;
+		}
 	}
 	#endregion
 }
+
