@@ -1,5 +1,23 @@
 Changes:
 
+Version 1.15, 2023-09-02
+- bug fix for Win 11 22H2 Build 22621.2215
+
+Version 1.14, 2023-08-29
+- version for Windows 11 22H2.2215 and up called VirtualDesktop11-23H2.cs
+- removed VirtualDesktopInsider.cs
+
+Version 1.13, 2023-06-25
+- no flashing icons after switching desktops (nearly always)
+
+Version 1.12, 2023-03-10
+- new parameter /ListWindowsOnDesktop - list handles of windows on desktop
+- new parameter /MoveWindowsToDesktop - move windows on desktop to another desktop
+- new parameter /CloseWindowsOnDesktop -  close windows on desktop
+- instead of a desktop name you can use LAST or *LAST* to select the last virtual desktop
+- renamed version for Windows 10 1607 to Windows Server 2016
+- removed version for Windows 10 1803
+
 Version 1.11, 2022-11-13
 - renaming for Windows 11 22H2
 
